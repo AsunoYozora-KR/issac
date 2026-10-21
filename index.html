@@ -1065,8 +1065,16 @@ const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
 const sticks={L:{id:null,ox:0,oy:0,vx:0,vy:0},R:{id:null,ox:0,oy:0,vx:0,vy:0}};
 const SR=55, keys={};
 function stickFor(id){ return sticks.L.id===id?sticks.L:sticks.R.id===id?sticks.R:null; }
+let lastV=null, infoTip=null;
+function tapItem(cx,cy){ // 화면 좌표 → 게임 좌표로 바꿔서 아이템을 눌렀는지 확인
+  if(mode!=='play'||!lastV) return false;
+  const wx=(cx-ox)/sc*A, wy=(cy-oy)/sc*A;
+  const k=lastV.pickups.find(k=>k.kind==='i'&&Math.abs(wx-k.x)<26&&wy>k.y-50&&wy<k.y+18);
+  if(k){ infoTip={id:k.item,x:k.x,y:k.y,until:now+4}; return true; }
+  infoTip=null; return false; }
+cv.addEventListener('mousedown',e=>tapItem(e.clientX,e.clientY));
 cv.addEventListener('touchstart',e=>{ e.preventDefault();
-  for(const t of e.changedTouches){ const s=t.clientX<innerWidth/2?sticks.L:sticks.R;
+  for(const t of e.changedTouches){ if(tapItem(t.clientX,t.clientY)) continue; const s=t.clientX<innerWidth/2?sticks.L:sticks.R;
     if(s.id===null){ s.id=t.identifier; s.ox=t.clientX; s.oy=t.clientY; s.vx=s.vy=0; } } },{passive:false});
 cv.addEventListener('touchmove',e=>{ e.preventDefault();
   for(const t of e.changedTouches){ const s=stickFor(t.identifier); if(!s) continue;
@@ -1099,10 +1107,11 @@ const decalC=document.createElement('canvas'); decalC.width=AW; decalC.height=AH
 function resize(){
   dpr=Math.min(3,devicePixelRatio||1); cw=innerWidth; ch=innerHeight;
   cv.width=Math.round(cw*dpr); cv.height=Math.round(ch*dpr);
-  sc=Math.min(cw/AW,ch/AH); ox=(cw-AW*sc)/2; oy=(ch-AH*sc)/2;
-  hs=Math.max(1,sc/1.5); hw=Math.ceil(cw/hs); hh=Math.ceil(ch/hs); hud.width=hw; hud.height=hh;
   const s=getComputedStyle(document.getElementById('safe'));
   safe={t:parseFloat(s.paddingTop)||0,r:parseFloat(s.paddingRight)||0,b:parseFloat(s.paddingBottom)||0,l:parseFloat(s.paddingLeft)||0};
+  const ah=ch-safe.b; // 아래쪽 홈 바 영역을 피해서 방(특히 남쪽 문)이 가려지지 않게
+  sc=Math.min(cw/AW,ah/AH); ox=(cw-AW*sc)/2; oy=(ah-AH*sc)/2;
+  hs=Math.max(1,sc/1.5); hw=Math.ceil(cw/hs); hh=Math.ceil(ch/hs); hud.width=hw; hud.height=hh;
 }
 addEventListener('resize',resize); addEventListener('orientationchange',()=>setTimeout(resize,200));
 
@@ -1455,8 +1464,11 @@ function doorSpr(kind,floor,shut){ return memo('dr'+kind+floor+shut,()=>{
   }
   return c; }); }
 const DROT={u:0,d:Math.PI,l:-Math.PI/2,r:Math.PI/2};
+function doorLightSpr(){ return memo('dlight',()=>{ const [c,g]=cvs(30,16), B=[0,2,3,1];
+  for(let y=0;y<16;y++) for(let x=0;x<30;x++){ const dx=(x+0.5-15)/15, dy=(y+0.5)/16, d=dx*dx+dy*dy; if(d>=1) continue;
+    const a=(1-d), q=Math.floor(a*3+B[(y%2)*2+(x%2)]/4)/3; if(q>0){ g.fillStyle=`rgba(255,236,190,${(q*0.2).toFixed(3)})`; g.fillRect(x,y,1,1); } } return c; }); }
 function drawDoor(g,d,kind,floor,open){ const s=doorSpr(kind,floor,!open), [tx,ty]=DOORT[d];
-  g.save(); g.translate((tx+0.5)*16,(ty+0.5)*16); g.rotate(DROT[d]); g.drawImage(s,-12,-8); g.restore(); }
+  g.save(); g.translate((tx+0.5)*16,(ty+0.5)*16); g.rotate(DROT[d]); g.drawImage(s,-12,-8); if(open) g.drawImage(doorLightSpr(),-15,8); g.restore(); }
 function doorKind(v,d){ const n=v.map&&v.map.find(m=>m[0]===v.cur[0]+DIRS[d][0]&&m[1]===v.cur[1]+DIRS[d][1]), t=n?n[2]:null;
   return (t==='boss'||v.room.type==='boss')?'b':(t==='shop'||v.room.type==='shop')?'i':'n'; }
 function trapSpr(){ return memo('trap',()=>{ const [c,g]=cvs(26,18);
@@ -1493,7 +1505,9 @@ function buildBG(room,floor){
 }
 function buildVig(){ const [c,g]=cvs(AW,AH), img=g.createImageData(AW,AH), B=[0,2,3,1];
   for(let y=0;y<AH;y++) for(let x=0;x<AW;x++){ const dx=(x+0.5-AW/2)/(AW/2), dy=(y+0.5-AH/2)/(AH/2), d=Math.sqrt(dx*dx*0.75+dy*dy*1.1);
-    const a=clamp((d-0.55)/0.7,0,1), q=Math.floor(a*4+B[(y%2)*2+(x%2)]/4)/4; img.data[(y*AW+x)*4+3]=Math.round(q*0.6*255); }
+    let a=clamp((d-0.55)/0.7,0,1);
+    for(const [qx,qy] of [[AW/2,8],[AW/2,AH-8],[8,AH/2],[AW-8,AH/2]]){ const dd=Math.hypot(x+0.5-qx,y+0.5-qy); a*=clamp((dd-10)/24,0,1); } // 문 주변은 밝게
+    const q=Math.floor(a*4+B[(y%2)*2+(x%2)]/4)/4; img.data[(y*AW+x)*4+3]=Math.round(q*0.6*255); }
   g.putImageData(img,0,0); return c; }
 function drawDecal(d){ const cx=d.x/A, cy=d.y/A, R=Math.max(1.5,d.r/A);
   if(d.burn){ for(let y=-R;y<=R;y++) for(let x=-R;x<=R;x++){ const q=(x*x+y*y)/(R*R); if(q>1||Math.random()<q*0.8) continue; dg.fillStyle='rgba(20,12,8,.45)'; dg.fillRect(Math.round(cx+x),Math.round(cy+y*0.7),1,1); } return; }
@@ -1663,6 +1677,18 @@ function drawHUD(v){
     if(ic) g.drawImage(ic,tx,y+Math.round((t1.height-ic.height)/2)+1);
     g.drawImage(t1,tx+iw,y+1); g.drawImage(t2,Math.round(hw/2-t2.width/2),y+t1.height);
     g.globalAlpha=1; }
+  // 아이템 설명창 (터치한 아이템 위)
+  if(infoTip&&now<infoTip.until){
+    const k=v.pickups.find(q=>q.kind==='i'&&q.item===infoTip.id&&Math.abs(q.x-infoTip.x)<2&&Math.abs(q.y-infoTip.y)<2);
+    if(!k) infoTip=null;
+    else { const it=ITEM[k.item], cp=!!(me.coupon), pr=k.price?(cp?Math.ceil(k.price*0.7):k.price):0;
+      const ic=itemSpr(it.id), t1=ptext(it.n,13,'#3a2010',null), t2=ptext(it.d,11,'#6a4628',null),
+        t3=ptext(`${it.cat=='경제'?'골드':it.cat}${pr?` · ${pr}골드${cp?' (할인)':''}`:' · 무료'}`,11,pr&&(v.gold||0)<pr?'#b02a1a':'#8a6a40',null);
+      const w=Math.max(t1.width+ic.width+5,t2.width,t3.width)+16, h=Math.max(t1.height,ic.height)+t2.height+t3.height;
+      const x=clamp(Math.round((ox+k.x/A*sc)/hs-w/2),12,hw-w-12), y=clamp(Math.round((oy+(k.y/A-24)*sc)/hs-h),8,hh-h-8);
+      g.globalAlpha=clamp((infoTip.until-now)/0.3,0,1); scroll(g,x,y,w,h);
+      g.drawImage(ic,x+8,y+1); g.drawImage(t1,x+8+ic.width+5,y+Math.max(0,Math.round((ic.height-t1.height)/2))+1);
+      const y2=y+Math.max(t1.height,ic.height); g.drawImage(t2,x+8,y2); g.drawImage(t3,x+8,y2+t2.height-3); g.globalAlpha=1; } }
   // 조이스틱
   const SRh=Math.round(SR/hs), KR=Math.round(24/hs);
   for(const [s,lab,dx] of [[sticks.L,'이동',safe.l+90],[sticks.R,'공격',cw-safe.r-90]]){
@@ -1674,6 +1700,7 @@ const LOBBY={room:{doors:{u:1,d:1,l:1,r:1},rocks:new Uint8Array(COLS*ROWS),type:
   players:[{x:W/2-70,y:H/2+40,fa:Math.PI/2,idx:0,down:false,inv:false,rev:0,orb:0,oa:0},{x:W/2+70,y:H/2+40,fa:Math.PI/2,idx:1,down:false,inv:false,rev:0,orb:0,oa:0}],
   enemies:[],bullets:[],pickups:[],trap:null};
 function render(v,dt){
+  lastV=v;
   renderWorld(v||LOBBY,dt);
   ctx.setTransform(1,0,0,1,0,0); ctx.imageSmoothingEnabled=false;
   ctx.fillStyle='#000'; ctx.fillRect(0,0,cv.width,cv.height);
